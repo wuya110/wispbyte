@@ -1,0 +1,140 @@
+#!/bin/bash
+# =========================================
+# 纯 VMESS + TCP 单节点
+# 翼龙面板专用：自动检测端口
+# 零冲突、自动配置、极速模式
+# =========================================
+set -uo pipefail
+
+# ========== 自动检测端口 ==========
+if [[ -n "${SERVER_PORT:-}" ]]; then
+  PORT="$SERVER_PORT"
+  echo "Port (env): $PORT"
+elif [[ $# -ge 1 && -n "$1" ]]; then
+  PORT="$1"
+  echo "Port (arg): $PORT"
+else
+  PORT=3250
+  echo "Port (default): $PORT"
+fi
+
+# ========== 文件定义 ==========
+MASQ_DOMAIN="www.bing.com"
+VMESS_BIN="./xray"
+VMESS_CONFIG="vmess.json"
+VMESS_LINK="vmess_link.txt"
+
+# ========== 加载已有配置 ==========
+load_config() {
+  if [[ -f "$VMESS_CONFIG" ]]; then
+    VMESS_UUID=$(grep -o '"id": "[^"]*' "$VMESS_CONFIG" | head -1 | cut -d'"' -f4)
+    echo "Loaded existing UUID: $VMESS_UUID"
+  fi
+}
+
+# ========== 下载 Xray ==========
+get_xray() {
+  if [[ ! -x "$VMESS_BIN" ]]; then
+    echo "Downloading Xray v1.8.23..."
+    curl -L -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/v1.8.23/Xray-linux-64.zip" --fail --connect-timeout 15
+    unzip -j xray.zip xray -d . >/dev/null 2>&1
+    rm -f xray.zip
+    chmod +x "$VMESS_BIN"
+  fi
+}
+
+# ========== 生成 VMESS 配置 ==========
+gen_vmess_config() {
+  cat > "$VMESS_CONFIG" <<EOF
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [{
+    "port": $PORT,
+    "protocol": "vmess",
+    "settings": {
+      "clients": [{
+        "id": "$VMESS_UUID",
+        "alterId": 0
+      }]
+    },
+    "streamSettings": {
+      "network": "tcp",
+      "security": "none",
+      "tcpSettings": {
+        "acceptProxyProtocol": false,
+        "header": {
+          "type": "http",
+          "request": {
+            "path": ["/"],
+            "headers": {
+              "Host": ["$MASQ_DOMAIN"]
+            }
+          }
+        }
+      }
+    },
+    "sniffing": {
+      "enabled": true,
+      "destOverride": ["http", "tls"]
+    }
+  }],
+  "outbounds": [{
+    "protocol": "freedom"
+  }]
+}
+EOF
+}
+
+# ========== 生成客户端链接 ==========
+gen_link() {
+  local ip="$1"
+
+  local json_base64=$(echo -n '{
+    "v": "2",
+    "ps": "VMESS-TCP",
+    "add": "'$ip'",
+    "port": "'$PORT'",
+    "id": "'$VMESS_UUID'",
+    "aid": "0",
+    "net": "tcp",
+    "type": "http",
+    "host": "'$MASQ_DOMAIN'",
+    "path": "/",
+    "tls": "none"
+  }' | base64 -w 0)
+
+  echo "vmess://$json_base64" > "$VMESS_LINK"
+
+  echo "========================================="
+  echo "VMESS + TCP Node:"
+  cat "$VMESS_LINK"
+  echo "========================================="
+}
+
+# ========== 启动服务 ==========
+run_vmess() {
+  echo "Starting VMESS TCP on :$PORT..."
+  while true; do
+    "$VMESS_BIN" run -c "$VMESS_CONFIG" >/dev/null 2>&1 || sleep 5
+  done
+}
+
+# ========== 主函数 ==========
+main() {
+  echo "Deploying VMESS + TCP (Single Node)"
+
+  load_config
+  [[ -z "${VMESS_UUID:-}" ]] && VMESS_UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)
+
+  get_xray
+  gen_vmess_config
+
+  ip=$(curl -s https://api64.ipify.org || echo "127.0.0.1")
+  gen_link "$ip"
+
+  run_vmess
+}
+
+main "$@"
