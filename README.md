@@ -6,7 +6,7 @@
 * 更新自适应端口，无需再手动设置
 
 ```
-https://github.com/wuya110/wispbyte/blob/main/vess
+curl -Ls https://raw.githubusercontent.com/wuya110/wispbyte/refs/heads/main/vess | sed 's/\r$//' | bash
 
 
 
