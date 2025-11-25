@@ -1,0 +1,68 @@
+#!/bin/bash
+set -uo pipefail
+
+# ========== 自动检测端口 ==========
+if [[ -n "${SERVER_PORT:-}" ]]; then
+  PORT="$SERVER_PORT"
+  echo "Port (env): $PORT"
+elif [[ $# -ge 1 && -n "$1" ]]; then
+  PORT="$1"
+  echo "Port (arg): $PORT"
+else
+  PORT=1080
+  echo "Port (default): $PORT"
+fi
+
+XRAY_BIN="./xray"
+XRAY_CONFIG="socks5.json"
+
+# ========== 下载 Xray ==========
+get_xray() {
+  if [[ ! -x "$XRAY_BIN" ]]; then
+    echo "Downloading Xray v1.8.23..."
+    curl -L -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/v1.8.23/Xray-linux-64.zip" --fail --connect-timeout 15
+    unzip -j xray.zip xray -d . >/dev/null 2>&1
+    rm -f xray.zip
+    chmod +x "$XRAY_BIN"
+  fi
+}
+
+# ========== 生成 SOCKS5 配置 ==========
+gen_config() {
+  cat > "$XRAY_CONFIG" <<EOF
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [{
+    "port": $PORT,
+    "protocol": "socks",
+    "settings": {
+      "auth": "noauth",
+      "udp": true
+    }
+  }],
+  "outbounds": [{
+    "protocol": "freedom"
+  }]
+}
+EOF
+}
+
+# ========== 启动 SOCKS5 服务 ==========
+run_socks() {
+  echo "Starting SOCKS5 on :$PORT..."
+  while true; do
+    "$XRAY_BIN" run -c "$XRAY_CONFIG" >/dev/null 2>&1 || sleep 5
+  done
+}
+
+# ========== 主函数 ==========
+main() {
+  echo "Deploying Pure SOCKS5 Proxy"
+  get_xray
+  gen_config
+  run_socks
+}
+
+main "$@"
