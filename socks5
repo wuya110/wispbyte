@@ -1,67 +1,98 @@
 #!/bin/bash
+# =========================================
+# VMESS + SOCKS5 单节点
+# 自动生成 SOCKS5 链接
+# =========================================
 set -uo pipefail
 
-# ========== 自动检测端口 ==========
-if [[ -n "${SERVER_PORT:-}" ]]; then
-  PORT="$SERVER_PORT"
-  echo "Port (env): $PORT"
-elif [[ $# -ge 1 && -n "$1" ]]; then
-  PORT="$1"
-  echo "Port (arg): $PORT"
-else
-  PORT=1080
-  echo "Port (default): $PORT"
-fi
+# 自动检测端口
+PORT=${SERVER_PORT:-${1:-3250}}
+echo "Port: $PORT"
 
-XRAY_BIN="./xray"
-XRAY_CONFIG="socks5.json"
+# 文件定义
+SOCKS_BIN="./xray"
+SOCKS_CONFIG="socks5.json"
+SOCKS_LINK="socks5_link.txt"
 
-# ========== 下载 Xray ==========
-get_xray() {
-  if [[ ! -x "$XRAY_BIN" ]]; then
-    echo "Downloading Xray v1.8.23..."
-    curl -L -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/v1.8.23/Xray-linux-64.zip" --fail --connect-timeout 15
-    unzip -j xray.zip xray -d . >/dev/null 2>&1
-    rm -f xray.zip
-    chmod +x "$XRAY_BIN"
+# 加载已有 UUID
+load_config() {
+  if [[ -f "$SOCKS_CONFIG" ]]; then
+    SOCKS_UUID=$(grep -o '"id": "[^"]*' "$SOCKS_CONFIG" | head -1 | cut -d'"' -f4)
+    echo "Loaded existing UUID: $SOCKS_UUID"
   fi
 }
 
-# ========== 生成 SOCKS5 配置 ==========
-gen_config() {
-  cat > "$XRAY_CONFIG" <<EOF
+# 下载 Xray
+get_xray() {
+  if [[ ! -x "$SOCKS_BIN" ]]; then
+    echo "Downloading Xray..."
+    curl -L -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/v1.8.23/Xray-linux-64.zip" --fail --connect-timeout 15
+    unzip -j xray.zip xray -d . >/dev/null 2>&1
+    rm -f xray.zip
+    chmod +x "$SOCKS_BIN"
+  fi
+}
+
+# 生成 SOCKS5 配置
+gen_socks_config() {
+  cat > "$SOCKS_CONFIG" <<EOF
 {
-  "log": {
-    "loglevel": "warning"
-  },
+  "log": { "loglevel": "warning" },
   "inbounds": [{
     "port": $PORT,
-    "protocol": "socks",
+    "protocol": "vmess",
     "settings": {
-      "auth": "noauth",
-      "udp": true
-    }
+      "clients": [{"id": "$SOCKS_UUID","alterId":0}]
+    },
+    "streamSettings": { "network": "socks", "security": "none" },
+    "sniffing": { "enabled": true, "destOverride": ["http","tls"] }
   }],
-  "outbounds": [{
-    "protocol": "freedom"
-  }]
+  "outbounds": [{"protocol": "freedom"}]
 }
 EOF
 }
 
-# ========== 启动 SOCKS5 服务 ==========
+# 生成客户端链接
+gen_link() {
+  local ip=$(curl -s https://api64.ipify.org || echo "127.0.0.1")
+
+  local json_base64=$(echo -n '{
+    "v":"2",
+    "ps":"VMESS-SOCKS5",
+    "add":"'$ip'",
+    "port":"'$PORT'",
+    "id":"'$SOCKS_UUID'",
+    "aid":"0",
+    "net":"socks",
+    "type":"none",
+    "host":"",
+    "path":"",
+    "tls":"none"
+  }' | base64 -w 0)
+
+  echo "vmess://$json_base64" > "$SOCKS_LINK"
+  echo "========================================="
+  echo "VMESS + SOCKS5 Node Link:"
+  cat "$SOCKS_LINK"
+  echo "========================================="
+}
+
+# 启动节点
 run_socks() {
-  echo "Starting SOCKS5 on :$PORT..."
+  echo "Starting VMESS SOCKS5 on :$PORT..."
   while true; do
-    "$XRAY_BIN" run -c "$XRAY_CONFIG" >/dev/null 2>&1 || sleep 5
+    "$SOCKS_BIN" run -c "$SOCKS_CONFIG" >/dev/null 2>&1 || sleep 5
   done
 }
 
-# ========== 主函数 ==========
+# 主函数
 main() {
-  echo "Deploying Pure SOCKS5 Proxy"
+  load_config
+  [[ -z "${SOCKS_UUID:-}" ]] && SOCKS_UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)
+
   get_xray
-  gen_config
+  gen_socks_config
+  gen_link
   run_socks
 }
 
