@@ -12,4 +12,5 @@ curl -Ls https://raw.githubusercontent.com/wuya110/wispbyte/refs/heads/main/vess
 
 # socks5一键脚本极简部署
 
+```
 curl -Ls https://raw.githubusercontent.com/wuya110/wispbyte/refs/heads/main/socks5 | sed 's/\r$//' | bash
