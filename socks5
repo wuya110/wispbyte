@@ -1,99 +1,54 @@
 #!/bin/bash
 # =========================================
-# VMESS + SOCKS5 单节点
-# 自动生成 SOCKS5 链接
+# 一键部署 Xray SOCKS5 并生成 socks5:// 链接
 # =========================================
 set -uo pipefail
 
-# 自动检测端口
-PORT=${SERVER_PORT:-${1:-3250}}
-echo "Port: $PORT"
+# 配置
+PORT=${SERVER_PORT:-${1:-9004}}
+USER=${SOCKS_USER:-user}
+PASS=${SOCKS_PASS:-pass}
+BIN="./xray"
+CONFIG="socks5.json"
+LINK_FILE="socks5_link.txt"
 
-# 文件定义
-SOCKS_BIN="./xray"
-SOCKS_CONFIG="socks5.json"
-SOCKS_LINK="socks5_link.txt"
-
-# 加载已有 UUID
-load_config() {
-  if [[ -f "$SOCKS_CONFIG" ]]; then
-    SOCKS_UUID=$(grep -o '"id": "[^"]*' "$SOCKS_CONFIG" | head -1 | cut -d'"' -f4)
-    echo "Loaded existing UUID: $SOCKS_UUID"
-  fi
-}
+# 获取公网 IP
+IP=$(curl -s https://api64.ipify.org || echo "127.0.0.1")
 
 # 下载 Xray
-get_xray() {
-  if [[ ! -x "$SOCKS_BIN" ]]; then
+if [[ ! -x "$BIN" ]]; then
     echo "Downloading Xray..."
-    curl -L -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/v1.8.23/Xray-linux-64.zip" --fail --connect-timeout 15
+    curl -L -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/v1.8.23/Xray-linux-64.zip"
     unzip -j xray.zip xray -d . >/dev/null 2>&1
     rm -f xray.zip
-    chmod +x "$SOCKS_BIN"
-  fi
-}
+    chmod +x "$BIN"
+fi
 
-# 生成 SOCKS5 配置
-gen_socks_config() {
-  cat > "$SOCKS_CONFIG" <<EOF
+# 生成配置
+cat > "$CONFIG" <<EOF
 {
   "log": { "loglevel": "warning" },
   "inbounds": [{
     "port": $PORT,
-    "protocol": "vmess",
+    "protocol": "socks",
     "settings": {
-      "clients": [{"id": "$SOCKS_UUID","alterId":0}]
-    },
-    "streamSettings": { "network": "socks", "security": "none" },
-    "sniffing": { "enabled": true, "destOverride": ["http","tls"] }
+      "auth": "password",
+      "accounts": [{"user":"$USER","pass":"$PASS"}],
+      "udp": true,
+      "ip": "127.0.0.1"
+    }
   }],
-  "outbounds": [{"protocol": "freedom"}]
+  "outbounds": [{"protocol":"freedom"}]
 }
 EOF
-}
 
-# 生成客户端链接
-gen_link() {
-  local ip=$(curl -s https://api64.ipify.org || echo "127.0.0.1")
+# 生成 SOCKS5 链接
+echo "socks5://$USER:$PASS@$IP:$PORT" > "$LINK_FILE"
+echo "========================================="
+echo "Your SOCKS5 Link:"
+cat "$LINK_FILE"
+echo "========================================="
 
-  local json_base64=$(echo -n '{
-    "v":"2",
-    "ps":"VMESS-SOCKS5",
-    "add":"'$ip'",
-    "port":"'$PORT'",
-    "id":"'$SOCKS_UUID'",
-    "aid":"0",
-    "net":"socks",
-    "type":"none",
-    "host":"",
-    "path":"",
-    "tls":"none"
-  }' | base64 -w 0)
-
-  echo "vmess://$json_base64" > "$SOCKS_LINK"
-  echo "========================================="
-  echo "VMESS + SOCKS5 Node Link:"
-  cat "$SOCKS_LINK"
-  echo "========================================="
-}
-
-# 启动节点
-run_socks() {
-  echo "Starting VMESS SOCKS5 on :$PORT..."
-  while true; do
-    "$SOCKS_BIN" run -c "$SOCKS_CONFIG" >/dev/null 2>&1 || sleep 5
-  done
-}
-
-# 主函数
-main() {
-  load_config
-  [[ -z "${SOCKS_UUID:-}" ]] && SOCKS_UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)
-
-  get_xray
-  gen_socks_config
-  gen_link
-  run_socks
-}
-
-main "$@"
+# 启动 Xray
+echo "Starting SOCKS5 on :$PORT..."
+"$BIN" run -c "$CONFIG"
